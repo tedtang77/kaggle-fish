@@ -13,13 +13,16 @@ from matplotlib import pyplot as plt
 
 import pandas as pd
 
+import PIL
+from PIL import Image
+
 from vgg16bn_ted import Vgg16BN
 
 from keras.utils import get_file, to_categorical
 from keras.preprocessing import image
-from keras.models import Sequential
-from keras.layers import Dense, BatchNormalization, Conv2D, MaxPooling2D 
-from keras.layers.core import Flatten, Dropout
+from keras.models import Sequential, Model
+from keras.layers import Dense, BatchNormalization, Conv2D, MaxPooling2D, GlobalAveragePooling2D, AveragePooling2D 
+from keras.layers import Flatten, Dropout, Input, Lambda, Add, Concatenate, Activation
 from keras.optimizers import Adam
 from keras.regularizers import l2
 from keras import backend as K
@@ -63,9 +66,18 @@ def split_at(model, layer_type):
     return model.layers[:last_idx+1], model.layers[last_idx+1:]
     
 
+def to_plot(img):
+    if K.image_dim_ordering() == 'tf':
+        return np.rollaxis(img, 0, 1).astype(np.uint8)
+    else:
+        return np.rollaxis(img, 0, 3).astype(np.uint8)
 
-def onehot(x):
-    return to_categorical(x)
+def plot(img):
+    plt.imshow(to_plot(img))
+    
+
+def onehot(x, num_classes=None):
+    return to_categorical(x, num_classes=num_classes)
 
 
 def ceil(x):
@@ -78,7 +90,7 @@ def floor(x):
 
 def save_array(fname, arr):
     # create an on-disk carray container
-    c = bcolz.carray(arr, rootdir=fname)
+    c = bcolz.carray(arr, rootdir=fname, mode='w')
     c.flush()
     
     
@@ -86,4 +98,46 @@ def load_array(fname):
     return bcolz.open(rootdir=fname)
     
 
+class MixIterator(object):
     
+    def __init__(self, iters):
+        self.iters = iters
+        self.n = int(np.sum([itr.n for itr in self.iters]))
+        self.batch_size = int(np.sum([itr.batch_size for itr in self.iters]))
+        self.steps_per_epoch = max([ceil(itr.n/itr.batch_size) for itr in self.iters])
+    
+    def reset(self):
+        for itr in self.iters: itr.reset()
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self, *args, **kwargs):
+        nexts = [next(itr) for itr in self.iters]
+        n0 = np.concatenate([n[0] for n in nexts])
+        n1 = np.concatenate([n[1] for n in nexts])
+        return (n0, n1)
+
+
+class PseudoLabelGenerator(object):
+    
+    def __init__(self, iterator, model):
+        self.iter = iterator
+        self.n = self.iter.n
+        self.batch_size = self.iter.batch_size
+        self.steps_per_epoch = ceil(self.iter.n/self.iter.batch_size)
+        self.model = model
+        self.class_indices = self.iter.class_indices
+        #self.classes = np.argmax(self.model.predict_generator(self.iter,steps=self.steps_per_epoch), axis=1)
+    
+    def reset(self):
+        self.iter.reset()
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self, *args, **kwargs):
+        nexts = next(self.iter)
+        results = self.model.predict(nexts[0], batch_size=self.batch_size)
+        return (nexts[0], results)
+

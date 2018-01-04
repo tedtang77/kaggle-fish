@@ -76,6 +76,8 @@ class Vgg16BN():
         
         
     def _create(self, size, include_top):
+        if size!=(224,224): include_top = False
+            
         input_shape = (3,)+size
         img_input = Input(shape=input_shape)
         
